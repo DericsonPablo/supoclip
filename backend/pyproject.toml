@@ -17,7 +17,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "yt-dlp[default]>=2026.10.21",
     "bgutil-ytdlp-pot-provider==2.0.2",
-    "whisper>=1.1.10",
     "greenlet>=2.0.0",
     "opencv-python>=4.8.0",
     "srt-equalizer>=0.1.10",

@@ -60,6 +60,7 @@ from ..clip_duration import clip_duration
 from ..config import get_config
 from ..media.source_limits import normalize_source_media
 from ..media_storage import MediaStorage
+from ..local_uploads import require_owned_local_upload
 from ..media.ffmpeg import (
     cap_video_short_side,
     ffprobe_duration,
@@ -381,6 +382,9 @@ class VideoService:
             reference = storage.validate_source(url, user_id)
             # ffprobe reads only the container headers through ranged requests.
             return ffprobe_duration(storage.signed_url(reference, "source.mp4", expires_in=300))
+        # Local references are opaque, but they still have to belong to the
+        # authenticated creator before the source can be billed or queued.
+        require_owned_local_upload(url, user_id)
         return ffprobe_duration(VideoService.resolve_local_video_path(url))
 
     @staticmethod

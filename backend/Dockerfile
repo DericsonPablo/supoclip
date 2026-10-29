@@ -1,7 +1,7 @@
 # Use Python 3.11 slim image
 FROM python:3.11.17-slim-trixie
 
-# Install system dependencies including ffmpeg and unzip (for deno).
+# Install system dependencies for local video processing.
 # Noto provides fallback glyphs for multilingual captions (including Hindi)
 # and colour emoji. libass/fontconfig selects them when a chosen font lacks glyphs.
 RUN apt-get update && apt-get install -y \
@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
     curl \
-    unzip \
     fonts-noto-core \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
@@ -17,13 +16,9 @@ RUN apt-get update && apt-get install -y \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
-# Install deno (required by yt-dlp for YouTube JS challenge solving)
-RUN curl -fsSL https://deno.land/install.sh | sh
-ENV DENO_DIR=/root/.deno
-ENV PATH="/root/.deno/bin:${PATH}"
-
-# Install uv package manager
-RUN pip install uv
+# Use the pinned uv binary; the local-upload pilot does not need a YouTube JS
+# runtime or a shell installer fetched during the build.
+COPY --from=ghcr.io/astral-sh/uv@sha256:bee0a2a458fd956c5df7b8b4c5fed2257b0af34866e3da7b51db0be3acb375d1 /uv /uvx /bin/
 
 # Set working directory
 WORKDIR /app

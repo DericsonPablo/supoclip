@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Any, cast
 import logging
 import asyncio
-import uuid
 import aiofiles
 
 from ...config import get_config
 from ...media_storage import MediaStorage, STORAGE_ERRORS, media_work
+from ...local_uploads import new_local_upload_reference
 from ...repositories.upload_repository import reserve_upload, bind_upload, get_upload, finish_upload, UploadLimitReached
 from ...utils.async_helpers import run_in_thread
 from ...database import get_db
@@ -374,8 +374,8 @@ async def upload_video(request: Request, db: AsyncSession = Depends(get_db)):
             uploads_dir.mkdir(parents=True, exist_ok=True)
 
             # Generate unique filename
-            file_extension = Path(upload_filename).suffix
-            unique_filename = f"{uuid.uuid4()}{file_extension}"
+            file_extension = MediaStorage.video_extension(upload_filename)
+            unique_filename, upload_reference = new_local_upload_reference(user_id, file_extension)
             video_path = uploads_dir / unique_filename
 
             # Save the uploaded file
@@ -401,7 +401,7 @@ async def upload_video(request: Request, db: AsyncSession = Depends(get_db)):
 
             return {
                 "message": "Video uploaded successfully",
-                "video_path": f"upload://{unique_filename}",
+                "video_path": upload_reference,
             }
         finally:
             await form_data.close()

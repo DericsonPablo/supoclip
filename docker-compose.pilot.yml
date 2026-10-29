@@ -1,0 +1,223 @@
+# Isolated, local-only pilot. Use this file by itself, not as an override of
+# docker-compose.yml, whose development bind mounts and extra services are
+# intentionally absent here.
+x-backend-environment: &backend-environment
+  PYTHONPATH: /app
+  PYTHONUNBUFFERED: "1"
+  DATABASE_URL: postgresql+asyncpg://supoclip:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.local}@postgres:5432/supoclip
+  TEMP_DIR: /app/uploads
+  MEDIA_STORAGE: local
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.local}
+  BACKEND_AUTH_SECRET: ${BACKEND_AUTH_SECRET:?Set BACKEND_AUTH_SECRET in .env.local}
+  APP_SETTINGS_ENCRYPTION_KEY: ${APP_SETTINGS_ENCRYPTION_KEY:?Set APP_SETTINGS_ENCRYPTION_KEY in .env.local}
+  SELF_HOST: "true"
+  TRANSCRIPTION_PROVIDER: whisper
+  WHISPER_MODEL_SIZE: base
+  LLM: ollama:qwen2.5:7b-instruct
+  RERANK_LLM: ollama:qwen2.5:7b-instruct
+  OLLAMA_BASE_URL: http://ollama:11434/v1
+  DEFAULT_PROCESSING_MODE: fast
+  MAX_CLIPS: "10"
+  FAST_MODE_MAX_CLIPS: "10"
+  SOCIAL_PUBLISHING_ACCESS: "off"
+  ASSEMBLY_AI_API_KEY: ""
+  OPENAI_API_KEY: ""
+  OPENROUTER_API_KEY: ""
+  GOOGLE_API_KEY: ""
+  ANTHROPIC_API_KEY: ""
+  POSTHOG_PROJECT_TOKEN: ""
+  NEXT_PUBLIC_APP_URL: http://127.0.0.1:3107
+  CORS_ORIGINS: http://127.0.0.1:3107,http://localhost:3107
+
+services:
+  frontend:
+    image: supoclip-pilot-frontend:local
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      target: runner
+      args:
+        NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+        NEXT_PUBLIC_APP_URL: http://127.0.0.1:3107
+        NEXT_PUBLIC_SELF_HOST: "true"
+        NEXT_PUBLIC_SOCIAL_PUBLISHING: ""
+        NEXT_PUBLIC_DATAFAST_WEBSITE_ID: ""
+        NEXT_PUBLIC_TILLY_WEBSITE_ID: ""
+        NEXT_PUBLIC_POSTHOG_KEY: ""
+        NEXT_PUBLIC_MAX_VIDEO_UPLOAD_BYTES: "4000000000"
+    networks:
+      - private
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_APP_URL: http://127.0.0.1:3107
+      NEXT_PUBLIC_SELF_HOST: "true"
+      BACKEND_INTERNAL_URL: http://backend:8000
+      DATABASE_URL: postgresql://supoclip:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.local}@postgres:5432/supoclip
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in .env.local}
+      BETTER_AUTH_URL: http://127.0.0.1:3107
+      BETTER_AUTH_TRUSTED_ORIGINS: http://127.0.0.1:3107,http://localhost:3107
+      BACKEND_AUTH_SECRET: ${BACKEND_AUTH_SECRET:?Set BACKEND_AUTH_SECRET in .env.local}
+      APP_SETTINGS_ENCRYPTION_KEY: ${APP_SETTINGS_ENCRYPTION_KEY:?Set APP_SETTINGS_ENCRYPTION_KEY in .env.local}
+      DISABLE_SIGN_UP: ${DISABLE_SIGN_UP:-false}
+      NEXT_PUBLIC_SOCIAL_PUBLISHING: ""
+      NEXT_PUBLIC_DATAFAST_WEBSITE_ID: ""
+      NEXT_PUBLIC_TILLY_WEBSITE_ID: ""
+      NEXT_PUBLIC_POSTHOG_KEY: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3107/api/auth/get-session"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  backend:
+    image: supoclip-pilot-backend:local
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_CPU_ONLY: "true"
+    platform: linux/amd64
+    command: [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    networks:
+      - private
+    volumes:
+      - uploads:/app/uploads
+      - clips:/app/clips
+      - whisper_models:/root/.cache/whisper
+    environment:
+      <<: *backend-environment
+      SUPOCLIP_SERVICE: backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health/db"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  worker:
+    image: supoclip-pilot-backend:local
+    platform: linux/amd64
+    networks:
+      - private
+    command: [".venv/bin/arq", "src.workers.tasks.WorkerSettings"]
+    volumes:
+      - uploads:/app/uploads
+      - clips:/app/clips
+      - whisper_models:/root/.cache/whisper
+    environment:
+      <<: *backend-environment
+      SUPOCLIP_SERVICE: worker
+      WORKER_MAX_JOBS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", ".venv/bin/arq", "--check", "src.workers.tasks.WorkerSettings"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  postgres:
+    image: postgres:15-alpine
+    networks:
+      - private
+    environment:
+      POSTGRES_DB: supoclip
+      POSTGRES_USER: supoclip
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.local}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supoclip -d supoclip"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - private
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env.local}
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama@sha256:dea72d1e22270fe095b68fdf756d2b489d615643c5a2eaebbc5f569181e322d8
+    environment:
+      OLLAMA_CONTEXT_LENGTH: "8192"
+    networks:
+      - private
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  gateway:
+    image: nginx@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    ports:
+      - "127.0.0.1:3107:3107"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./pilot-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    networks:
+      - private
+      - public
+    restart: unless-stopped
+
+networks:
+  private:
+    internal: true
+  public:
+    driver: bridge
+
+volumes:
+  uploads:
+  clips:
+  whisper_models:
+  postgres_data:
+  redis_data:
+  ollama_models:
